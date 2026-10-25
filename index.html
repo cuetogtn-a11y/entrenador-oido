@@ -3357,7 +3357,7 @@ function ledger(x, y) {
     g.fillText(st.piece ? 'Pulsa «Empezar a cantar» para ver tu afinación en vivo' : 'Elige una pieza', W / 2, H / 2);
   }
 
-  function draw(nowBeat) {
+  function draw(nowBeat, detMidi) {
     var cv = $('gCanvas'), g = cv.getContext('2d'), W = cv.width, H = cv.height;
     g.clearRect(0, 0, W, H);
 
@@ -3452,26 +3452,17 @@ function ledger(x, y) {
       drawNote(x, y, noteShape(e.dBeat), '#2f5d8a');
     });
 
-    // Lo que cantas, en vivo: una cabeza de nota de color colocada en tu altura real (no en
-    // la de la nota esperada), para que la distancia visual entre las dos notas sea tu error
-    // exacto de afinación. Verde = afinado, naranja = algo desviado, rojo = desviado de más.
-    // Se desvanece en poco más de un pulso para no dejar un rastro largo que estorbe.
-    var cutoff = nowBeat - 2;
-    st.trace = st.trace.filter(function (p) { return p.beat >= cutoff; });
-    st.trace.forEach(function (p) {
-      if (p.midi == null || p.beat < nowBeat - 1.4) return;
-      var actP = activeAt(p.beat);
-      var color = '#9a978e';
-      if (actP != null) {
-        var cents = Math.abs((p.midi - actP.midi) * 100);
-        color = cents <= 20 ? '#2e7d4f' : (cents <= 50 ? '#d99a00' : '#b3372f');
-      }
-      var age = (nowBeat - p.beat) / 1.4;
-      g.globalAlpha = Math.max(0.15, 1 - age);
-      g.beginPath(); g.ellipse(xFor(p.beat), yFor(diatonicStepContinuous(p.midi)), lineGap * 0.52, lineGap * 0.39, -0.3, 0, 2 * Math.PI);
-      g.fillStyle = color; g.fill();
-      g.globalAlpha = 1;
-    });
+    // Lo que cantas, en vivo: UNA sola cabeza de nota (no un rastro), pegada justo al lado de
+    // la nota que toca cantar ahora, en tu altura real — para comparar directamente las dos:
+    // verde = afinado, naranja = algo desviado, rojo = desviado de más. Solo se dibuja mientras
+    // hay una nota activa que cantar y se detecta tu voz; si no, no hay nada que comparar.
+    if (detMidi != null && act != null) {
+      var cents2 = Math.abs((detMidi - act.midi) * 100);
+      var voiceColor = cents2 <= 20 ? '#2e7d4f' : (cents2 <= 50 ? '#d99a00' : '#b3372f');
+      var vx = xFor(act.tBeat) + lineGap * 1.15, vy = yFor(diatonicStepContinuous(detMidi));
+      g.beginPath(); g.ellipse(vx, vy, lineGap * 0.52, lineGap * 0.39, -0.3, 0, 2 * Math.PI);
+      g.fillStyle = voiceColor; g.fill();
+    }
   }
 
   function updateReadout(detMidi, nowBeat) {
@@ -3515,8 +3506,7 @@ function ledger(x, y) {
     } else {
       st.smMidi = null;
     }
-    if (nowBeat >= 0) st.trace.push({ beat: nowBeat, midi: detMidi });
-    draw(nowBeat);
+    draw(nowBeat, detMidi);
     updateReadout(detMidi, nowBeat);
     if (nowBeat > st.totalBeats + 2) { stopSinging(); return; }
     st.raf = window.requestAnimationFrame(frame);
