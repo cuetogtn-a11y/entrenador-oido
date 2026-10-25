@@ -13,17 +13,17 @@
   padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
   --bg: #f4f1ea; --fg: #1d1c1a; --muted: #6b675e; --card: #fbf8f1; --line: #d8d2c4;
-  --accent: #2f5d8a; --ok: #2e7d4f; --bad: #b3372f;
+  --accent: #2f5d8a; --ok: #2e7d4f; --bad: #b3372f; --rhythm: #8a4fae;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #18181a; --fg: #ecebe6; --muted: #9a978e; --card: #232326; --line: #3a3a3e;
-    --accent: #6fa3d6; --ok: #58b47d; --bad: #e0736a;
+    --accent: #6fa3d6; --ok: #58b47d; --bad: #e0736a; --rhythm: #c399e0;
   }
 }
 :root[data-theme="dark"] {
   --bg: #18181a; --fg: #ecebe6; --muted: #9a978e; --card: #232326; --line: #3a3a3e;
-  --accent: #6fa3d6; --ok: #58b47d; --bad: #e0736a;
+  --accent: #6fa3d6; --ok: #58b47d; --bad: #e0736a; --rhythm: #c399e0;
 }
 html { scroll-padding-top: env(safe-area-inset-top, 0px); }
 *, *::before, *::after { box-sizing: border-box; }
@@ -152,11 +152,13 @@ button.tabbtn { font-size: .9rem; }
 .gReadout { background: var(--card); border: 2px solid var(--line); border-radius: 12px; padding: 10px; text-align: center; font-size: 1.05rem; font-weight: 600; margin-bottom: 8px; min-height: 1.4em; }
 .gReadout.ok { border-color: var(--ok); color: var(--ok); }
 .gReadout.bad { border-color: var(--bad); color: var(--bad); }
+.gReadout.rhythm { border-color: var(--rhythm); color: var(--rhythm); }
 .gMeter { position: relative; height: 14px; background: var(--card); border: 1px solid var(--line); border-radius: 7px; margin-bottom: 14px; overflow: hidden; }
 .gMeter .gMeterZero { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: var(--line); }
 .gMeter .gMeterFill { position: absolute; top: 1px; bottom: 1px; width: 6px; border-radius: 3px; background: var(--muted); left: 50%; transform: translateX(-50%); }
 .gMeter .gMeterFill.ok { background: var(--ok); }
 .gMeter .gMeterFill.bad { background: var(--bad); }
+.gMeter .gMeterFill.rhythm { background: var(--rhythm); }
 .gStatus { font-size: .82rem; color: var(--muted); margin-bottom: 10px; text-align: center; min-height: 1.2em; }
 #gStart.on { border-color: var(--bad); box-shadow: 0 0 0 2px var(--bad); }
 </style>
@@ -3385,6 +3387,23 @@ function ledger(x, y) {
     }
     return null;
   }
+  // La nota "activa" la marca el reloj (el tiempo transcurrido contra la pista de referencia),
+  // no lo que realmente se oye: si vas un poco adelantado o atrasado respecto al tempo exacto,
+  // el reloj ya ha pasado a la nota siguiente (o aún no ha llegado) aunque tu afinación sea
+  // perfecta, y eso se veía como un fallo de afinación. Para distinguir ese caso de un fallo de
+  // oído real, se busca, entre las notas cercanas en el tiempo (no solo la activa), cuál encaja
+  // mejor con lo que cantas: si es la anterior o la siguiente, el problema es de ritmo, no de oído.
+  function nearbyPitchMatch(detMidi, nowBeat, excludeEvent) {
+    var best = null, bestCents = Infinity;
+    st.events.forEach(function (e) {
+      if (e === excludeEvent) return;
+      if (e.tBeat < nowBeat - 2 || e.tBeat > nowBeat + 2) return;
+      var cents = Math.abs((detMidi - e.midi) * 100);
+      if (cents < bestCents) { bestCents = cents; best = e; }
+    });
+    if (best && bestCents <= 30) return best;
+    return null;
+  }
 
   function fillPieceSelect() {
     var sel = $('gPiece'); sel.innerHTML = '';
@@ -3783,11 +3802,16 @@ function ledger(x, y) {
 
     // Lo que cantas, en vivo: UNA sola cabeza de nota (no un rastro), pegada justo al lado de
     // la nota que toca cantar ahora, en tu altura real — para comparar directamente las dos:
-    // verde = afinado, naranja = algo desviado, rojo = desviado de más. Solo se dibuja mientras
-    // hay una nota activa que cantar y se detecta tu voz; si no, no hay nada que comparar.
+    // verde = afinado, naranja = algo desviado, rojo = desviado de más. Morado = la afinación en
+    // sí es correcta pero corresponde a la nota anterior o siguiente (vas adelantado o atrasado
+    // respecto al reloj), para no confundir un problema de ritmo con uno de oído. Solo se dibuja
+    // mientras hay una nota activa que cantar y se detecta tu voz; si no, no hay nada que comparar.
     if (detMidi != null && act != null) {
       var cents2 = Math.abs((detMidi - act.midi) * 100);
-      var voiceColor = cents2 <= 20 ? '#2e7d4f' : (cents2 <= 50 ? '#d99a00' : '#b3372f');
+      var voiceColor;
+      if (cents2 <= 20) voiceColor = '#2e7d4f';
+      else if (cents2 <= 50) voiceColor = '#d99a00';
+      else voiceColor = nearbyPitchMatch(detMidi, nowBeat, act) ? '#8a4fae' : '#b3372f';
       var vx = xFor(act.tBeat) + lineGap * 1.15, vy = yFor(diatonicStepContinuous(detMidi));
       simpleNoteHead(g, lineGap, vx, vy, voiceColor);
     }
@@ -3806,9 +3830,20 @@ function ledger(x, y) {
     var act = activeAt(nowBeat);
     if (act) {
       var cents = (detMidi - act.midi) * 100, ok = Math.abs(cents) <= 25;
-      ro.textContent = ok ? ('✓ ' + name + ' — coincide con ' + midiName(act.midi)) : ('✗ cantas ' + name + ', se espera ' + midiName(act.midi));
-      ro.className = 'gReadout ' + (ok ? 'ok' : 'bad');
-      mf.className = 'gMeterFill ' + (ok ? 'ok' : 'bad');
+      if (ok) {
+        ro.textContent = '✓ ' + name + ' — coincide con ' + midiName(act.midi);
+        ro.className = 'gReadout ok'; mf.className = 'gMeterFill ok';
+      } else {
+        var nm = nearbyPitchMatch(detMidi, nowBeat, act);
+        if (nm) {
+          var dir = nm.tBeat < act.tBeat ? 'vas con retraso' : 'vas adelantado';
+          ro.textContent = '♪ ' + name + ' está bien afinado, pero ' + dir + ' — es ritmo, no oído';
+          ro.className = 'gReadout rhythm'; mf.className = 'gMeterFill rhythm';
+        } else {
+          ro.textContent = '✗ cantas ' + name + ', se espera ' + midiName(act.midi);
+          ro.className = 'gReadout bad'; mf.className = 'gMeterFill bad';
+        }
+      }
       var pct = Math.max(-50, Math.min(50, cents));
       mf.style.left = (50 + pct) + '%';
     } else {
