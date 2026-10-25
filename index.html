@@ -3437,7 +3437,10 @@ function ledger(x, y) {
     }
   }
   function previewPlay() {
-    if (!st.piece || !st.events.length) return;
+    if (!st.piece || !st.events.length) {
+      $('gStatus').textContent = 'No hay ninguna pieza cargada todavía.';
+      return;
+    }
     stopPreview();
     var c = ctx(), bd = 60 / bpm(), t0 = c.currentTime + 0.08;
     prevMaster = c.createGain(); prevMaster.gain.value = 1; prevMaster.connect(c.destination);
@@ -3803,7 +3806,10 @@ function ledger(x, y) {
   }
 
   function startSinging() {
-    if (!st.piece || !st.events.length) return;
+    if (!st.piece || !st.events.length) {
+      $('gStatus').textContent = 'No hay ninguna pieza cargada todavía: sube tu repertorio (próximamente) o prueba la pestaña «Vocalización» de arriba.';
+      return;
+    }
     if (st.running) { stopSinging(); return; }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       $('gStatus').textContent = 'Este navegador no ofrece acceso al micrófono aquí (navigator.mediaDevices no existe). Prueba a abrir la página directamente en Chrome o Safari, fuera de cualquier app que la incruste.';
