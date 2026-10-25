@@ -581,12 +581,13 @@ button.tabbtn { font-size: .9rem; }
 </div>
 <div id="cantoApp" class="hidden">
   <div class="row">
-    <button type="button" class="tabbtn on" id="cantoSubRepertoire">Repertorio</button>
+    <button type="button" class="tabbtn on" id="cantoSubExercises">Ejercicios</button>
+    <button type="button" class="tabbtn" id="cantoSubRepertoire">Repertorio</button>
     <button type="button" class="tabbtn" id="cantoSubVocal">Vocalización</button>
   </div>
 
   <div id="cantoRepertoire">
-  <p class="sub">Cantas con el micrófono mientras sigues la partitura al tempo que elijas; ves en vivo si afinas y si vas a tiempo.</p>
+  <p class="sub" id="cantoRepertoireSub">Cantas con el micrófono mientras sigues la partitura al tempo que elijas; ves en vivo si afinas y si vas a tiempo.</p>
 
   <div class="settings">
     <label style="flex-basis:100%">Pieza
@@ -3313,7 +3314,13 @@ function ledger(x, y) {
       ]
     }
   ];
-  function PIECES() { return CANTO_EXERCISES.concat(((window.EO && window.EO.PIECES) || []).filter(pieceSingable)); }
+  // Dos fuentes separadas, para no mezclar los ejercicios compuestos por Claude con el
+  // repertorio real que Dani vaya subiendo: 'exercises' son solo los CANTO_EXERCISES de arriba;
+  // 'repertoire' son solo las piezas reales (filtradas por pieceSingable), nunca los ejercicios.
+  function PIECES(source) {
+    if (source === 'repertoire') return ((window.EO && window.EO.PIECES) || []).filter(pieceSingable);
+    return CANTO_EXERCISES;
+  }
 
   // Colocación en el pentagrama: a cada clase de altura (Do..Si) le corresponde un "escalón"
   // diatónico (0..6 dentro de la octava); los sostenidos comparten el escalón de su nota natural
@@ -3420,6 +3427,7 @@ function ledger(x, y) {
   }
 
   var st = {
+    source: 'exercises',
     piece: null, hand: 0, events: [], voiceEvents: {}, otherOn: {}, totalBeats: 0, clef: 'treble', refStep: TREBLE_REF,
     running: false, raf: 0, ctx: null, master: null, otherMaster: null, mic: null, src: null, analyser: null, buf: null,
     t0: 0, bd: 0, trace: [], smMidi: null, silenceSince: 0
@@ -3484,9 +3492,11 @@ function ledger(x, y) {
 
   function fillPieceSelect() {
     var sel = $('gPiece'); sel.innerHTML = '';
-    var list = PIECES();
+    var list = PIECES(st.source);
     if (!list.length) {
-      var o0 = document.createElement('option'); o0.textContent = '— sin piezas disponibles todavía —'; o0.disabled = true;
+      var o0 = document.createElement('option');
+      o0.textContent = st.source === 'repertoire' ? '— todavía no has subido partituras —' : '— sin ejercicios disponibles —';
+      o0.disabled = true;
       sel.appendChild(o0);
       return;
     }
@@ -3517,7 +3527,7 @@ function ledger(x, y) {
   }
   function loadPiece(i) {
     stopSinging();
-    var list = PIECES();
+    var list = PIECES(st.source);
     st.piece = list[i] || list[0];
     if (!st.piece) {
       st.events = []; st.voiceEvents = {}; st.totalBeats = 0;
@@ -3824,7 +3834,9 @@ function ledger(x, y) {
     var g = cv.getContext('2d'), W = cv.width, H = cv.height;
     g.clearRect(0, 0, W, H);
     g.fillStyle = '#9a978e'; g.font = '13px system-ui, sans-serif'; g.textAlign = 'center';
-    var lines = ['Todavía no hay piezas aptas para cantar aquí', '(una sola nota por voz, sin acordes).', 'Mientras tanto, usa la pestaña «Vocalización».'];
+    var lines = st.source === 'repertoire'
+      ? ['Todavía no has subido partituras de repertorio propio.', 'Mientras tanto, prueba la pestaña «Ejercicios».']
+      : ['Sin ejercicios disponibles ahora mismo.', 'Prueba la pestaña «Vocalización».'];
     lines.forEach(function (ln, i) { g.fillText(ln, W / 2, H / 2 - 14 + i * 18); });
   }
 
@@ -4037,17 +4049,28 @@ function ledger(x, y) {
     b.addEventListener('click', function () { if (b.dataset.v !== 'canto') { stopSinging(); voStop(); } });
   });
 
-  $('cantoSubRepertoire').addEventListener('click', function () {
-    voStop();
-    $('cantoSubRepertoire').classList.add('on'); $('cantoSubVocal').classList.remove('on');
+  // Tres sub-pestañas, dos fuentes de piezas: «Ejercicios» (CANTO_EXERCISES, compuestos por
+  // Claude) y «Repertorio» (partituras reales que Dani suba, nunca mezcladas con los ejercicios)
+  // comparten el mismo panel/pentagrama/controles (#cantoRepertoire), cambiando solo st.source;
+  // «Vocalización» es un panel aparte sin partitura.
+  function setCantoSubTab(tab) {
+    stopSinging(); voStop();
+    ['cantoSubExercises', 'cantoSubRepertoire', 'cantoSubVocal'].forEach(function (id) { $(id).classList.remove('on'); });
+    if (tab === 'vocal') {
+      $('cantoSubVocal').classList.add('on');
+      $('cantoVocal').classList.remove('hidden'); $('cantoRepertoire').classList.add('hidden');
+      voDraw(null);
+      return;
+    }
+    st.source = tab; // 'exercises' | 'repertoire'
+    $(tab === 'repertoire' ? 'cantoSubRepertoire' : 'cantoSubExercises').classList.add('on');
     $('cantoRepertoire').classList.remove('hidden'); $('cantoVocal').classList.add('hidden');
-  });
-  $('cantoSubVocal').addEventListener('click', function () {
-    stopSinging();
-    $('cantoSubVocal').classList.add('on'); $('cantoSubRepertoire').classList.remove('on');
-    $('cantoVocal').classList.remove('hidden'); $('cantoRepertoire').classList.add('hidden');
-    voDraw(null);
-  });
+    fillPieceSelect();
+    loadPiece(0);
+  }
+  $('cantoSubExercises').addEventListener('click', function () { setCantoSubTab('exercises'); });
+  $('cantoSubRepertoire').addEventListener('click', function () { setCantoSubTab('repertoire'); });
+  $('cantoSubVocal').addEventListener('click', function () { setCantoSubTab('vocal'); });
   $('voModeFree').addEventListener('click', function () { setVoMode('free'); });
   $('voModeTarget').addEventListener('click', function () { setVoMode('target'); });
   $('voNewNote').addEventListener('click', voPickTarget);
