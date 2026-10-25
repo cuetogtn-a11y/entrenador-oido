@@ -2887,6 +2887,7 @@ function ledger(x, y) {
   var DEMO = {
     title: 'Ejemplo de prueba (pentagrama redibujado por la app)',
     source: 'Frase generada para comprobar el reproductor; no es una obra real.',
+    demo: true, // frase ficticia de prueba interna: nunca debe ofrecerse como pieza para cantar
     staves: [
       { clef: 'treble', label: 'Mano derecha', bars: [
         { cells: ['Q', 'Q', 'Q', 'Q'], pitches: [dia(4, 0), dia(4, 1), dia(4, 2), dia(4, 3)], ties: [], beats: 4 },
@@ -3194,6 +3195,7 @@ function ledger(x, y) {
   // con un acorde. Se descartan aquí las piezas que no cumplan esto (p. ej. piezas de piano
   // pensadas para dos manos con acordes, reutilizadas de otro módulo).
   function pieceSingable(p) {
+    if (p.demo) return false; // frase de prueba interna, no es repertorio real
     var seen = {};
     for (var m = 0; m < p.measures.length; m++) {
       var ms = p.measures[m];
