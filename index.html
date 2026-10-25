@@ -578,6 +578,12 @@ button.tabbtn { font-size: .9rem; }
   <p class="hint">Toca un compás para seleccionarlo; toca otro para extender la selección a ese rango (tocar dentro de la selección la reinicia, tocar el único compás elegido lo quita). Sin selección, los botones tocan la pieza entera. Activa «Bucle» para repetir la selección (o la pieza entera) sin parar, hasta que pulses Parar. Mientras suena, las notas se iluminan en rojo. Sube un PDF en el chat y te lo cargo aquí.</p>
 </div>
 <div id="cantoApp" class="hidden">
+  <div class="row">
+    <button type="button" class="tabbtn on" id="cantoSubRepertoire">Repertorio</button>
+    <button type="button" class="tabbtn" id="cantoSubVocal">Vocalización</button>
+  </div>
+
+  <div id="cantoRepertoire">
   <p class="sub">Cantas con el micrófono mientras sigues la partitura al tempo que elijas; ves en vivo si afinas y si vas a tiempo.</p>
 
   <div class="settings">
@@ -631,6 +637,41 @@ button.tabbtn { font-size: .9rem; }
   </div>
 
   <p class="hint">Usa auriculares si puedes: así el micrófono no capta el clic ni las demás voces y la detección de afinación es más limpia. Las notas se deslizan por un pentagrama real (clave de sol o de fa, según el registro de la voz elegida) con su figura real (redonda, blanca, negra, corchea…), y la que toca cantar ahora se resalta con un halo. Lo que tú cantas se dibuja como otra cabeza de nota, puesta en tu altura real: si cantas más alto o más bajo que la nota resaltada, verás tu nota separada de ella en esa misma dirección y a esa misma distancia (verde = afinado, naranja/rojo = desviado), así ves tu error exacto. Si la pieza tiene más de una voz, puedes elegir cuáles suenan contigo: así practicas mantener tu cuerda sin dejarte arrastrar por lo que oyes, como en un coro.</p>
+  </div>
+
+  <div id="cantoVocal" class="hidden">
+    <p class="sub">Sin partitura: para calentar la voz o practicar a dar una nota exacta, sin más contexto.</p>
+
+    <div class="row">
+      <button type="button" class="tabbtn on" id="voModeFree">🎤 Identificar lo que canto</button>
+      <button type="button" class="tabbtn" id="voModeTarget">🎯 Cantar la nota pedida</button>
+    </div>
+
+    <div class="settings">
+      <label>Nota más grave
+        <select id="voMin"></select>
+      </label>
+      <label>Nota más aguda
+        <select id="voMax"></select>
+      </label>
+    </div>
+
+    <div class="row" id="voTargetRow" style="display:none;">
+      <button class="act" id="voNewNote">🎲 Proponer nota</button>
+      <button class="act" id="voHearNote">🔊 Escucharla</button>
+    </div>
+
+    <canvas id="voCanvas" width="760" height="220"></canvas>
+    <div class="gReadout" id="voReadout">—</div>
+    <div class="gMeter"><div class="gMeterZero"></div><div class="gMeterFill" id="voMeterFill"></div></div>
+    <div class="gStatus" id="voStatus"></div>
+
+    <div class="row">
+      <button class="act primary" id="voStart">🎙 Empezar</button>
+    </div>
+
+    <p class="hint">En «Identificar lo que canto» no hay nota pedida: cantas lo que quieras (para calentar o explorar) y ves en el pentagrama y en el texto qué nota estás emitiendo, en tiempo real. En «Cantar la nota pedida» se propone una nota al azar dentro del rango que elijas arriba; cántala y verás tu nota al lado de la pedida, coloreada según tu afinación. Si la mantienes afinada un momento, pasa sola a la siguiente.</p>
+  </div>
 </div>
 </main>
 
@@ -3175,6 +3216,60 @@ function ledger(x, y) {
     else if (rel < 0) { for (var r2 = -2; r2 >= rel - 1e-6; r2 -= 2) out.push(r2); }
     return out;
   }
+  // Líneas adicionales para una posición relativa al refStep de un pentagrama con línea
+  // inferior en bottomLineY. Compartida por el pentagrama de Repertorio y el de Vocalización.
+  function drawLedgers(g, lineGap, bottomLineY, relStep, cx, halfW) {
+    g.strokeStyle = '#4a4538';
+    ledgerRelSteps(relStep).forEach(function (r) {
+      var ly = bottomLineY - r * (lineGap / 2);
+      g.beginPath(); g.moveTo(cx - halfW, ly); g.lineTo(cx + halfW, ly); g.stroke();
+    });
+  }
+  // Clasifica una duración en beats a una figura real (redonda/blanca/negra/corchea/
+  // semicorchea, con su puntillo si corresponde), para dibujar la cabeza de nota correcta
+  // en vez de una barra abstracta.
+  function noteShape(dBeat) {
+    var cand = [[4, 'whole', false], [3, 'half', true], [2, 'half', false],
+      [1.5, 'quarter', true], [1, 'quarter', false], [0.75, 'eighth', true],
+      [0.5, 'eighth', false], [0.375, 'sixteenth', true], [0.25, 'sixteenth', false]];
+    var best = cand[cand.length - 1], bestDiff = Infinity;
+    cand.forEach(function (c) { var diff = Math.abs(c[0] - dBeat); if (diff < bestDiff) { bestDiff = diff; best = c; } });
+    return { kind: best[1], dotted: best[2] };
+  }
+  // Dibuja la cabeza de nota (hueca para redonda/blanca, rellena para negra/corchea/
+  // semicorchea), con plica y corchetes según la figura. x,y = posición de la cabeza.
+  function drawNoteShape(g, lineGap, x, y, shape, color) {
+    var rx = lineGap * 0.52, ry = lineGap * 0.39;
+    g.save(); g.translate(x, y);
+    g.beginPath(); g.ellipse(0, 0, rx, ry, -0.3, 0, 2 * Math.PI);
+    if (shape.kind === 'whole' || shape.kind === 'half') {
+      g.lineWidth = 1.6; g.strokeStyle = color; g.stroke();
+    } else {
+      g.fillStyle = color; g.fill();
+    }
+    if (shape.kind !== 'whole') {
+      var stemX = rx * 0.9, stemTop = -lineGap * 3.2;
+      g.beginPath(); g.moveTo(stemX, -ry * 0.3); g.lineTo(stemX, stemTop);
+      g.lineWidth = 1.4; g.strokeStyle = color; g.stroke();
+      var flags = shape.kind === 'eighth' ? 1 : (shape.kind === 'sixteenth' ? 2 : 0);
+      for (var fl = 0; fl < flags; fl++) {
+        var fy = stemTop + fl * 6;
+        g.beginPath(); g.moveTo(stemX, fy);
+        g.quadraticCurveTo(stemX + 9, fy + 5, stemX + 2, fy + 14);
+        g.lineWidth = 1.4; g.strokeStyle = color; g.stroke();
+      }
+    }
+    if (shape.dotted) { g.beginPath(); g.fillStyle = color; g.arc(rx + 5, ry * 0.1, 1.6, 0, 2 * Math.PI); g.fill(); }
+    g.restore();
+  }
+  // Cabeza de nota sencilla, sin plica ni figura: para Vocalización, donde no hay ritmo que
+  // representar, solo la altura (la pedida y la cantada).
+  function simpleNoteHead(g, lineGap, x, y, color) {
+    g.save(); g.translate(x, y);
+    g.beginPath(); g.ellipse(0, 0, lineGap * 0.52, lineGap * 0.39, -0.3, 0, 2 * Math.PI);
+    g.fillStyle = color; g.fill();
+    g.restore();
+  }
 
   var st = {
     piece: null, hand: 0, events: [], voiceEvents: {}, otherOn: {}, totalBeats: 0, clef: 'treble', refStep: TREBLE_REF,
@@ -3349,6 +3444,174 @@ function ledger(x, y) {
 
   function freqToMidi(f) { return 69 + 12 * Math.log2(f / 440); }
 
+  // ----- Vocalización: sin partitura, solo identificar lo que cantas o cantar una nota pedida.
+  // Reutiliza ctx()/toneAt/detectPitch/freqToMidi y los dibujos de pentagrama de arriba, pero
+  // con su propio micrófono y su propio bucle, independientes del modo Repertorio.
+  var vo = { mode: 'free', targetMidi: null, running: false, raf: 0, mic: null, src: null, analyser: null, buf: null, smMidi: null, holdStart: 0 };
+
+  function voClefFor(m) { return m < 57 ? { clef: 'bass', refStep: BASS_REF } : { clef: 'treble', refStep: TREBLE_REF }; }
+
+  function fillVoRangeSelects() {
+    var selMin = $('voMin'), selMax = $('voMax');
+    if (selMin.options.length) return;
+    for (var m = 43; m <= 84; m++) {
+      var o1 = document.createElement('option'); o1.value = m; o1.textContent = midiName(m); selMin.appendChild(o1);
+      var o2 = document.createElement('option'); o2.value = m; o2.textContent = midiName(m); selMax.appendChild(o2);
+    }
+    selMin.value = 55; selMax.value = 72; // Sol3 .. Do5, rango de partida razonable
+  }
+
+  function voPickTarget() {
+    var lo = parseInt($('voMin').value, 10), hi = parseInt($('voMax').value, 10);
+    if (isNaN(lo) || isNaN(hi)) return;
+    if (hi < lo) { var t = lo; lo = hi; hi = t; }
+    vo.targetMidi = lo + Math.floor(Math.random() * (hi - lo + 1));
+    vo.holdStart = 0;
+    $('voStatus').textContent = vo.running ? 'Canta la nota de arriba.' : '';
+    voDraw(null);
+  }
+
+  function voHearTarget() {
+    if (vo.targetMidi == null) return;
+    var c = ctx();
+    toneAt(c, c.destination, c.currentTime + 0.02, 1.1, vo.targetMidi, 0.8);
+  }
+
+  function voDraw(detMidi) {
+    var cv = $('voCanvas'); if (!cv.getContext) return;
+    var g = cv.getContext('2d'), W = cv.width, H = cv.height;
+    g.clearRect(0, 0, W, H);
+    var lineGap = 15, bottomLineY = 150, topLineY = bottomLineY - 4 * lineGap;
+    var anchor = vo.mode === 'target' && vo.targetMidi != null ? vo.targetMidi : (detMidi != null ? Math.round(detMidi) : 69);
+    var cl = voClefFor(anchor);
+    function yFor(step) { return bottomLineY - (step - cl.refStep) * (lineGap / 2); }
+
+    g.strokeStyle = '#4a4538'; g.lineWidth = 1.2;
+    for (var li = 0; li < 5; li++) { var ly = topLineY + li * lineGap; g.beginPath(); g.moveTo(0, ly); g.lineTo(W, ly); g.stroke(); }
+    g.lineWidth = 1;
+
+    g.fillStyle = '#4a4538'; g.textAlign = 'center';
+    if (cl.clef === 'treble') { g.font = (lineGap * 6.4) + 'px serif'; g.fillText('𝄞', 40, bottomLineY - lineGap * 0.4); }
+    else { g.font = (lineGap * 3.6) + 'px serif'; g.fillText('𝄢', 40, topLineY + lineGap * 1.6); }
+
+    var cxTarget = W / 2 - (vo.mode === 'target' ? 40 : 0);
+    if (vo.mode === 'target' && vo.targetMidi != null) {
+      var step = diatonicStepInt(vo.targetMidi), rel = step - cl.refStep, yT = yFor(step);
+      drawLedgers(g, lineGap, bottomLineY, rel, cxTarget, lineGap * 1.1);
+      simpleNoteHead(g, lineGap, cxTarget, yT, '#2f5d8a');
+    }
+
+    if (detMidi != null) {
+      var cxVoice = cxTarget, color = '#2f5d8a';
+      if (vo.mode === 'target' && vo.targetMidi != null) {
+        var cents = Math.abs((detMidi - vo.targetMidi) * 100);
+        color = cents <= 20 ? '#2e7d4f' : (cents <= 50 ? '#d99a00' : '#b3372f');
+        cxVoice = cxTarget + lineGap * 2.2;
+      }
+      var stepV = Math.round(diatonicStepContinuous(detMidi)), yV = yFor(diatonicStepContinuous(detMidi));
+      drawLedgers(g, lineGap, bottomLineY, stepV - cl.refStep, cxVoice, lineGap * 1.1);
+      simpleNoteHead(g, lineGap, cxVoice, yV, color);
+    } else if (vo.mode === 'free' || vo.targetMidi == null) {
+      g.fillStyle = '#9a978e'; g.font = '13px system-ui, sans-serif'; g.textAlign = 'center';
+      g.fillText(vo.mode === 'target' ? 'Pulsa «Proponer nota»' : 'Pulsa «Empezar» y canta', W / 2, bottomLineY + 45);
+    }
+  }
+
+  function voUpdateReadout(detMidi) {
+    var ro = $('voReadout'), mf = $('voMeterFill');
+    if (detMidi == null) {
+      ro.textContent = 'Silencio'; ro.className = 'gReadout'; mf.className = 'gMeterFill'; mf.style.left = '50%';
+      return;
+    }
+    var nearest = Math.round(detMidi), centsNearest = (detMidi - nearest) * 100, name = midiName(nearest);
+    if (vo.mode === 'target' && vo.targetMidi != null) {
+      var cents = (detMidi - vo.targetMidi) * 100, ok = Math.abs(cents) <= 25;
+      ro.textContent = ok ? ('✓ ' + name + ' — coincide con ' + midiName(vo.targetMidi)) : ('✗ cantas ' + name + ', se pide ' + midiName(vo.targetMidi));
+      ro.className = 'gReadout ' + (ok ? 'ok' : 'bad');
+      mf.className = 'gMeterFill ' + (ok ? 'ok' : 'bad');
+      mf.style.left = (50 + Math.max(-50, Math.min(50, cents))) + '%';
+    } else {
+      ro.textContent = name + ' (' + (centsNearest >= 0 ? '+' : '') + Math.round(centsNearest) + '¢)';
+      ro.className = 'gReadout'; mf.className = 'gMeterFill';
+      mf.style.left = (50 + Math.max(-50, Math.min(50, centsNearest))) + '%';
+    }
+  }
+
+  function voFrame() {
+    if (!vo.running) return;
+    var c = ctx();
+    vo.analyser.getFloatTimeDomainData(vo.buf);
+    var f = detectPitch(vo.buf, c.sampleRate);
+    var detMidi = null;
+    if (f > 0) {
+      var m = freqToMidi(f);
+      vo.smMidi = vo.smMidi == null ? m : vo.smMidi * 0.55 + m * 0.45;
+      detMidi = vo.smMidi;
+    } else { vo.smMidi = null; }
+    voDraw(detMidi);
+    voUpdateReadout(detMidi);
+    // En «Cantar la nota pedida»: si se mantiene afinado un instante, se pasa sola a la siguiente.
+    if (vo.mode === 'target' && vo.targetMidi != null && detMidi != null && Math.abs((detMidi - vo.targetMidi) * 100) <= 25) {
+      if (!vo.holdStart) vo.holdStart = performance.now();
+      if (performance.now() - vo.holdStart > 900) {
+        $('voStatus').textContent = '¡Bien! Siguiente nota…';
+        setTimeout(function () { if (vo.running) voPickTarget(); }, 450);
+        vo.holdStart = -1; // evita relanzar mientras llega el setTimeout
+      }
+    } else {
+      vo.holdStart = 0;
+    }
+    vo.raf = window.requestAnimationFrame(voFrame);
+  }
+
+  function voStop() {
+    vo.running = false;
+    if (vo.raf && window.cancelAnimationFrame) window.cancelAnimationFrame(vo.raf);
+    vo.raf = 0;
+    if (vo.src) { try { vo.src.disconnect(); } catch (e) {} vo.src = null; }
+    if (vo.mic) { try { vo.mic.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} vo.mic = null; }
+    vo.analyser = null; vo.smMidi = null; vo.holdStart = 0;
+    var b = $('voStart'); if (b) { b.textContent = '🎙 Empezar'; b.classList.remove('on'); }
+    voDraw(null);
+  }
+
+  function voStart() {
+    if (vo.running) { voStop(); return; }
+    stopSinging(); // solo un micrófono activo a la vez
+    if (vo.mode === 'target' && vo.targetMidi == null) voPickTarget();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      $('voStatus').textContent = 'Este navegador no ofrece acceso al micrófono aquí.';
+      return;
+    }
+    $('voStatus').textContent = 'Pidiendo acceso al micrófono…';
+    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }).then(function (stream) {
+      var c = ctx();
+      vo.mic = stream;
+      vo.src = c.createMediaStreamSource(stream);
+      vo.analyser = c.createAnalyser();
+      vo.analyser.fftSize = 2048;
+      vo.src.connect(vo.analyser);
+      vo.buf = new Float32Array(vo.analyser.fftSize);
+      vo.smMidi = null; vo.running = true; vo.holdStart = 0;
+      $('voStart').textContent = '⏹ Parar'; $('voStart').classList.add('on');
+      $('voStatus').textContent = vo.mode === 'target' ? 'Canta la nota de arriba.' : 'Canta cualquier sonido.';
+      vo.raf = window.requestAnimationFrame(voFrame);
+    }).catch(function (e) {
+      var name = (e && e.name) || 'Error', msg = (e && e.message) || String(e);
+      $('voStatus').textContent = 'No se ha podido acceder al micrófono — ' + name + ': ' + msg + '. Cópiame este mensaje tal cual.';
+    });
+  }
+
+  function setVoMode(mode) {
+    if (vo.mode === mode) return;
+    voStop();
+    vo.mode = mode; vo.targetMidi = null;
+    $('voModeFree').classList.toggle('on', mode === 'free');
+    $('voModeTarget').classList.toggle('on', mode === 'target');
+    $('voTargetRow').style.display = mode === 'target' ? 'flex' : 'none';
+    if (mode === 'target') voPickTarget(); else voDraw(null);
+  }
+
   function drawIdle() {
     var cv = $('gCanvas'); if (!cv.getContext) return;
     var g = cv.getContext('2d'), W = cv.width, H = cv.height;
@@ -3391,52 +3654,6 @@ function ledger(x, y) {
       g.fillText('𝄢', 26, topLineY + lineGap * 1.6);
     }
 
-    function ledgerLinesAt(relStep, cx, halfW) {
-      g.strokeStyle = '#4a4538';
-      ledgerRelSteps(relStep).forEach(function (r) {
-        var ly2 = yFor(st.refStep + r);
-        g.beginPath(); g.moveTo(cx - halfW, ly2); g.lineTo(cx + halfW, ly2); g.stroke();
-      });
-    }
-
-    // Clasifica una duración en beats a una figura real (redonda/blanca/negra/corchea/
-    // semicorchea, con su puntillo si corresponde), para dibujar la cabeza de nota correcta
-    // en vez de una barra abstracta.
-    function noteShape(dBeat) {
-      var cand = [[4, 'whole', false], [3, 'half', true], [2, 'half', false],
-        [1.5, 'quarter', true], [1, 'quarter', false], [0.75, 'eighth', true],
-        [0.5, 'eighth', false], [0.375, 'sixteenth', true], [0.25, 'sixteenth', false]];
-      var best = cand[cand.length - 1], bestDiff = Infinity;
-      cand.forEach(function (c) { var diff = Math.abs(c[0] - dBeat); if (diff < bestDiff) { bestDiff = diff; best = c; } });
-      return { kind: best[1], dotted: best[2] };
-    }
-    // Dibuja la cabeza de nota (hueca para redonda/blanca, rellena para negra/corchea/
-    // semicorchea), con plica y corchetes según la figura. x,y = posición de la cabeza.
-    function drawNote(x, y, shape, color) {
-      var rx = lineGap * 0.52, ry = lineGap * 0.39;
-      g.save(); g.translate(x, y);
-      g.beginPath(); g.ellipse(0, 0, rx, ry, -0.3, 0, 2 * Math.PI);
-      if (shape.kind === 'whole' || shape.kind === 'half') {
-        g.lineWidth = 1.6; g.strokeStyle = color; g.stroke();
-      } else {
-        g.fillStyle = color; g.fill();
-      }
-      if (shape.kind !== 'whole') {
-        var stemX = rx * 0.9, stemTop = -lineGap * 3.2;
-        g.beginPath(); g.moveTo(stemX, -ry * 0.3); g.lineTo(stemX, stemTop);
-        g.lineWidth = 1.4; g.strokeStyle = color; g.stroke();
-        var flags = shape.kind === 'eighth' ? 1 : (shape.kind === 'sixteenth' ? 2 : 0);
-        for (var fl = 0; fl < flags; fl++) {
-          var fy = stemTop + fl * 6;
-          g.beginPath(); g.moveTo(stemX, fy);
-          g.quadraticCurveTo(stemX + 9, fy + 5, stemX + 2, fy + 14);
-          g.lineWidth = 1.4; g.strokeStyle = color; g.stroke();
-        }
-      }
-      if (shape.dotted) { g.beginPath(); g.fillStyle = color; g.arc(rx + 5, ry * 0.1, 1.6, 0, 2 * Math.PI); g.fill(); }
-      g.restore();
-    }
-
     // La nota que tocaría cantar ahora mismo se resalta con un halo, en vez de una línea
     // vertical fija: así ves de un vistazo cuál es, sin que una raya cruce la partitura.
     var act = activeAt(nowBeat);
@@ -3444,12 +3661,12 @@ function ledger(x, y) {
       if (e.tBeat + e.dBeat < nowBeat - 4 || e.tBeat > nowBeat + 10) return;
       var step = diatonicStepInt(Math.round(e.midi)), rel = step - st.refStep;
       var x = xFor(e.tBeat), y = yFor(step);
-      ledgerLinesAt(rel, x, lineGap * 1.1);
+      drawLedgers(g, lineGap, bottomLineY, rel, x, lineGap * 1.1);
       if (e === act) {
         g.fillStyle = 'rgba(217,154,0,0.3)';
         g.beginPath(); g.ellipse(x, y, lineGap * 1.3, lineGap * 1.7, 0, 0, 2 * Math.PI); g.fill();
       }
-      drawNote(x, y, noteShape(e.dBeat), '#2f5d8a');
+      drawNoteShape(g, lineGap, x, y, noteShape(e.dBeat), '#2f5d8a');
     });
 
     // Lo que cantas, en vivo: UNA sola cabeza de nota (no un rastro), pegada justo al lado de
@@ -3460,8 +3677,7 @@ function ledger(x, y) {
       var cents2 = Math.abs((detMidi - act.midi) * 100);
       var voiceColor = cents2 <= 20 ? '#2e7d4f' : (cents2 <= 50 ? '#d99a00' : '#b3372f');
       var vx = xFor(act.tBeat) + lineGap * 1.15, vy = yFor(diatonicStepContinuous(detMidi));
-      g.beginPath(); g.ellipse(vx, vy, lineGap * 0.52, lineGap * 0.39, -0.3, 0, 2 * Math.PI);
-      g.fillStyle = voiceColor; g.fill();
+      simpleNoteHead(g, lineGap, vx, vy, voiceColor);
     }
   }
 
@@ -3590,11 +3806,29 @@ function ledger(x, y) {
   $('gPreview').addEventListener('click', previewPlay);
   $('gStart').addEventListener('click', startSinging);
   document.querySelectorAll('#tabs .tabbtn').forEach(function (b) {
-    b.addEventListener('click', function () { if (b.dataset.v !== 'canto') stopSinging(); });
+    b.addEventListener('click', function () { if (b.dataset.v !== 'canto') { stopSinging(); voStop(); } });
   });
+
+  $('cantoSubRepertoire').addEventListener('click', function () {
+    voStop();
+    $('cantoSubRepertoire').classList.add('on'); $('cantoSubVocal').classList.remove('on');
+    $('cantoRepertoire').classList.remove('hidden'); $('cantoVocal').classList.add('hidden');
+  });
+  $('cantoSubVocal').addEventListener('click', function () {
+    stopSinging();
+    $('cantoSubVocal').classList.add('on'); $('cantoSubRepertoire').classList.remove('on');
+    $('cantoVocal').classList.remove('hidden'); $('cantoRepertoire').classList.add('hidden');
+    voDraw(null);
+  });
+  $('voModeFree').addEventListener('click', function () { setVoMode('free'); });
+  $('voModeTarget').addEventListener('click', function () { setVoMode('target'); });
+  $('voNewNote').addEventListener('click', voPickTarget);
+  $('voHearNote').addEventListener('click', voHearTarget);
+  $('voStart').addEventListener('click', voStart);
 
   fillPieceSelect();
   loadPiece(0);
+  fillVoRangeSelects();
 })();
 </script>
 <script>
