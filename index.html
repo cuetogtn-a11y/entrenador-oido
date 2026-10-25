@@ -3316,6 +3316,15 @@ function ledger(x, y) {
     g.fillStyle = color; g.fill();
     g.restore();
   }
+  // Clave de fa: carácter de texto (𝄢). Su posición depende de la fuente del dispositivo, así
+  // que el ajuste de x/y es una aproximación a ojo, no un cálculo exacto desde las líneas.
+  function drawBassClef(g, x, topLineY, lineGap, color) {
+    g.save();
+    g.fillStyle = color; g.textAlign = 'center';
+    g.font = (lineGap * 3.6) + 'px serif';
+    g.fillText('𝄢', x, topLineY + lineGap * 2.3);
+    g.restore();
+  }
 
   var st = {
     piece: null, hand: 0, events: [], voiceEvents: {}, otherOn: {}, totalBeats: 0, clef: 'treble', refStep: TREBLE_REF,
@@ -3571,7 +3580,7 @@ function ledger(x, y) {
 
     g.fillStyle = '#4a4538'; g.textAlign = 'center';
     if (cl.clef === 'treble') { g.font = (lineGap * 6.4) + 'px serif'; g.fillText('𝄞', 40, bottomLineY - lineGap * 0.4); }
-    else { g.font = (lineGap * 3.6) + 'px serif'; g.fillText('𝄢', 40, topLineY + lineGap * 1.6); }
+    else { drawBassClef(g, 40, topLineY, lineGap, '#4a4538'); }
 
     var cxTarget = W / 2 - (vo.mode === 'target' ? 40 : 0);
     if (vo.mode === 'target' && vo.targetMidi != null) {
@@ -3738,8 +3747,7 @@ function ledger(x, y) {
       g.font = (lineGap * 6.4) + 'px serif';
       g.fillText('𝄞', 26, bottomLineY - lineGap * 0.4);
     } else {
-      g.font = (lineGap * 3.6) + 'px serif';
-      g.fillText('𝄢', 26, topLineY + lineGap * 1.6);
+      drawBassClef(g, 26, topLineY, lineGap, '#4a4538');
     }
 
     // La nota que tocaría cantar ahora mismo se resalta con un halo, en vez de una línea
