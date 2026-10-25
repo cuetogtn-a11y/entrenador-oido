@@ -141,6 +141,9 @@ button.tabbtn { font-size: .9rem; }
 .nmark.on { display: block; }
 .barsys.playing { background: rgba(240,180,30,.30); border-color: #d99a00; }
 .hint { color: var(--muted); font-size: .8rem; text-align: center; margin-top: 18px; }
+.otherVoicesLabel { font-size: .8rem; color: var(--muted); align-self: center; }
+.otherVoices { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.otherVoiceChk { display: inline-flex; align-items: center; gap: 5px; font-size: .8rem; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; cursor: pointer; }
 .hidden { display: none; }
 #gCanvas { display: block; width: 100%; height: auto; background: #fbf8f1; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; touch-action: none; }
 .gReadout { background: var(--card); border: 2px solid var(--line); border-radius: 12px; padding: 10px; text-align: center; font-size: 1.05rem; font-weight: 600; margin-bottom: 8px; min-height: 1.4em; }
@@ -606,6 +609,11 @@ button.tabbtn { font-size: .9rem; }
     </label>
   </div>
 
+  <div class="row" id="gOtherVoicesRow" style="display:none;flex-wrap:wrap;align-items:center;">
+    <span class="otherVoicesLabel">Mientras cantas, suenan también:</span>
+    <span class="otherVoices" id="gOtherVoices"></span>
+  </div>
+
   <div class="row">
     <button class="act" id="gPreview">🎧 Escuchar la voz elegida</button>
   </div>
@@ -619,7 +627,7 @@ button.tabbtn { font-size: .9rem; }
     <button class="act primary" id="gStart">🎙 Empezar a cantar</button>
   </div>
 
-  <p class="hint">Usa auriculares si puedes: así el micrófono no capta el clic ni la pieza y la detección de afinación es más limpia. Las notas se deslizan por un pentagrama real (clave de sol o de fa, según el registro de la voz elegida) hacia la línea roja; los puntos de color son lo que tú cantas, colocados en su altura correcta del pentagrama (verde = afinado, naranja/rojo = desviado). Si tus puntos llegan antes o después de que la nota toque la línea roja, vas adelantado o atrasado de tempo.</p>
+  <p class="hint">Usa auriculares si puedes: así el micrófono no capta el clic ni las demás voces y la detección de afinación es más limpia. Las notas se deslizan por un pentagrama real (clave de sol o de fa, según el registro de la voz elegida) hacia la línea roja; los puntos de color son lo que tú cantas, colocados en su altura correcta del pentagrama (verde = afinado, naranja/rojo = desviado). Si tus puntos llegan antes o después de que la nota toque la línea roja, vas adelantado o atrasado de tempo. Si la pieza tiene más de una voz, puedes elegir cuáles suenan contigo: así practicas mantener tu cuerda sin dejarte arrastrar por lo que oyes, como en un coro.</p>
 </div>
 </main>
 
@@ -3166,8 +3174,8 @@ function ledger(x, y) {
   }
 
   var st = {
-    piece: null, hand: 0, events: [], totalBeats: 0, clef: 'treble', refStep: TREBLE_REF,
-    running: false, raf: 0, ctx: null, master: null, mic: null, src: null, analyser: null, buf: null,
+    piece: null, hand: 0, events: [], voiceEvents: {}, otherOn: {}, totalBeats: 0, clef: 'treble', refStep: TREBLE_REF,
+    running: false, raf: 0, ctx: null, master: null, otherMaster: null, mic: null, src: null, analyser: null, buf: null,
     t0: 0, bd: 0, trace: [], smMidi: null, silenceSince: 0
   };
 
@@ -3177,21 +3185,29 @@ function ledger(x, y) {
     return Math.max(8, Math.round(b * f));
   }
 
+  // Construye los eventos de TODAS las voces de la pieza (st.voiceEvents, por índice de mano),
+  // no solo la elegida: así las demás voces se pueden reproducir como acompañamiento polifónico
+  // mientras cantas la tuya (st.events), igual que en un coro real.
   function buildEvents() {
-    var p = st.piece, out = [];
+    var p = st.piece;
+    st.voiceEvents = {};
     if (!p) { st.events = []; st.totalBeats = 0; return; }
+    var nHands = (p.hands || ['Voz']).length;
+    for (var h = 0; h < nHands; h++) st.voiceEvents[h] = [];
     p.measures.forEach(function (ms, m) {
       ms.forEach(function (n) {
-        if (n.h !== st.hand) return;
-        out.push({ tBeat: m * 4 + n.t, dBeat: n.d, midi: n.midi });
+        var arr = st.voiceEvents[n.h];
+        if (arr) arr.push({ tBeat: m * 4 + n.t, dBeat: n.d, midi: n.midi });
       });
     });
-    out.sort(function (a, b) { return a.tBeat - b.tBeat; });
-    st.events = out;
+    Object.keys(st.voiceEvents).forEach(function (h) {
+      st.voiceEvents[h].sort(function (a, b) { return a.tBeat - b.tBeat; });
+    });
+    st.events = st.voiceEvents[st.hand] || [];
     st.totalBeats = p.measures.length * 4;
-    if (out.length) {
-      var sum = 0; out.forEach(function (e) { sum += e.midi; });
-      var avg = sum / out.length;
+    if (st.events.length) {
+      var sum = 0; st.events.forEach(function (e) { sum += e.midi; });
+      var avg = sum / st.events.length;
       if (avg < 57) { st.clef = 'bass'; st.refStep = BASS_REF; } else { st.clef = 'treble'; st.refStep = TREBLE_REF; }
     }
   }
@@ -3212,12 +3228,31 @@ function ledger(x, y) {
     (st.piece.hands || ['Voz']).forEach(function (label, i) { var o = document.createElement('option'); o.value = i; o.textContent = label; sel.appendChild(o); });
     sel.value = String(st.hand);
   }
+  // Casillas para las demás voces de la pieza: cuáles suenan como acompañamiento mientras cantas
+  // la tuya. Por defecto todas activas, para simular un coro completo; se puede desmarcar cualquiera.
+  function fillOtherVoices() {
+    var box = $('gOtherVoices'); box.innerHTML = '';
+    var labels = (st.piece && st.piece.hands) || ['Voz'];
+    var any = false;
+    labels.forEach(function (label, i) {
+      if (i === st.hand) return;
+      any = true;
+      if (!(i in st.otherOn)) st.otherOn[i] = true;
+      var wrap = document.createElement('label'); wrap.className = 'otherVoiceChk';
+      var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!st.otherOn[i];
+      cb.addEventListener('change', function () { st.otherOn[i] = cb.checked; });
+      wrap.appendChild(cb); wrap.appendChild(document.createTextNode(' ' + label));
+      box.appendChild(wrap);
+    });
+    $('gOtherVoicesRow').style.display = any ? 'flex' : 'none';
+  }
   function loadPiece(i) {
     stopSinging();
     var list = PIECES();
     st.piece = list[i] || list[0];
     if (!st.piece) return;
     st.hand = 0;
+    st.otherOn = {};
     fillHandSelect();
     if (st.piece.bpm) {
       var opts = [50, 60, 70, 85, 100, 120], best = opts[0];
@@ -3225,6 +3260,7 @@ function ledger(x, y) {
       $('gTempo').value = String(best);
     }
     buildEvents();
+    fillOtherVoices();
     drawIdle();
   }
 
@@ -3233,9 +3269,10 @@ function ledger(x, y) {
     if (st.ctx.state === 'suspended') st.ctx.resume();
     return st.ctx;
   }
-  function toneAt(c, dest, t, dur, midi) {
+  function toneAt(c, dest, t, dur, midi, vol) {
+    vol = vol == null ? 1 : vol;
     var gate = Math.max(0.08, dur * 0.92), f = 440 * Math.pow(2, (midi - 69) / 12);
-    var peak = 0.35, sus = 0.18, decayDur = Math.min(0.05, gate * 0.3), relDur = Math.min(0.09, gate * 0.3);
+    var peak = 0.35 * vol, sus = 0.18 * vol, decayDur = Math.min(0.05, gate * 0.3), relDur = Math.min(0.09, gate * 0.3);
     var decayEnd = t + 0.01 + decayDur, susEnd = Math.max(decayEnd, t + gate - relDur);
     var g = c.createGain();
     g.gain.setValueAtTime(0.0001, t);
@@ -3447,6 +3484,11 @@ function ledger(x, y) {
       try { st.master.disconnect(); } catch (e) {}
       st.master = null;
     }
+    if (st.otherMaster) {
+      try { var c2 = ctx(); st.otherMaster.gain.cancelScheduledValues(0); st.otherMaster.gain.setValueAtTime(0, c2.currentTime); } catch (e) {}
+      try { st.otherMaster.disconnect(); } catch (e) {}
+      st.otherMaster = null;
+    }
     if (st.src) { try { st.src.disconnect(); } catch (e) {} st.src = null; }
     if (st.mic) { try { st.mic.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} st.mic = null; }
     st.analyser = null; st.trace = []; st.smMidi = null;
@@ -3478,6 +3520,18 @@ function ledger(x, y) {
       for (var i = 0; i < LEAD_BEATS; i++) clickAt(c, st.master, st.t0 + i * st.bd, i === 0);
       for (var b = 0; b < st.totalBeats; b++) clickAt(c, st.master, st.t0 + (LEAD_BEATS + b) * st.bd, b % 4 === 0);
 
+      // Polifonía: las demás voces marcadas en «Mientras cantas, suenan también» se reproducen
+      // desde el compás 1 (igual que un coro), para entrenar a mantener tu propia cuerda sin
+      // dejarte arrastrar por lo que oyes. Tu propia voz nunca suena por aquí: la cantas tú.
+      st.otherMaster = c.createGain(); st.otherMaster.gain.value = 1; st.otherMaster.connect(c.destination);
+      Object.keys(st.voiceEvents).forEach(function (h) {
+        h = parseInt(h, 10);
+        if (h === st.hand || !st.otherOn[h]) return;
+        st.voiceEvents[h].forEach(function (ev) {
+          toneAt(c, st.otherMaster, st.t0 + (LEAD_BEATS + ev.tBeat) * st.bd, ev.dBeat * st.bd * 0.95, ev.midi, 0.55);
+        });
+      });
+
       st.trace = []; st.smMidi = null; st.running = true;
       $('gStart').textContent = '⏹ Parar'; $('gStart').classList.add('on');
       $('gStatus').textContent = 'Escucha el clic de preparación y entra cuando llegues al compás 1.';
@@ -3494,7 +3548,7 @@ function ledger(x, y) {
   }
 
   $('gPiece').addEventListener('change', function () { loadPiece(parseInt($('gPiece').value, 10)); });
-  $('gHand').addEventListener('change', function () { st.hand = parseInt($('gHand').value, 10) || 0; stopSinging(); buildEvents(); drawIdle(); });
+  $('gHand').addEventListener('change', function () { st.hand = parseInt($('gHand').value, 10) || 0; stopSinging(); buildEvents(); fillOtherVoices(); drawIdle(); });
   $('gPreview').addEventListener('click', previewPlay);
   $('gStart').addEventListener('click', startSinging);
   document.querySelectorAll('#tabs .tabbtn').forEach(function (b) {
