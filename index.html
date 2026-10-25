@@ -3521,6 +3521,15 @@ function ledger(x, y) {
   var vo = { mode: 'free', targetMidi: null, running: false, raf: 0, mic: null, src: null, analyser: null, buf: null, smMidi: null, holdStart: 0 };
 
   function voClefFor(m) { return m < 57 ? { clef: 'bass', refStep: BASS_REF } : { clef: 'treble', refStep: TREBLE_REF }; }
+  // La clave se decide UNA vez para todo el rango elegido (grave/aguda), no nota a nota: si
+  // cambiara con cada nota propuesta, saltaría entre clave de sol y de fa sin avisar según te
+  // tocara una nota más grave o más aguda, algo muy raro de leer. Igual que en Repertorio, donde
+  // la clave sale del registro medio de la pieza entera.
+  function voCurrentClef() {
+    var lo = parseInt($('voMin').value, 10), hi = parseInt($('voMax').value, 10);
+    if (isNaN(lo) || isNaN(hi)) return { clef: 'treble', refStep: TREBLE_REF };
+    return voClefFor((lo + hi) / 2);
+  }
 
   function fillVoRangeSelects() {
     var selMin = $('voMin'), selMax = $('voMax');
@@ -3553,8 +3562,7 @@ function ledger(x, y) {
     var g = cv.getContext('2d'), W = cv.width, H = cv.height;
     g.clearRect(0, 0, W, H);
     var lineGap = 15, bottomLineY = 150, topLineY = bottomLineY - 4 * lineGap;
-    var anchor = vo.mode === 'target' && vo.targetMidi != null ? vo.targetMidi : (detMidi != null ? Math.round(detMidi) : 69);
-    var cl = voClefFor(anchor);
+    var cl = voCurrentClef();
     function yFor(step) { return bottomLineY - (step - cl.refStep) * (lineGap / 2); }
 
     g.strokeStyle = '#4a4538'; g.lineWidth = 1.2;
@@ -3909,6 +3917,8 @@ function ledger(x, y) {
   $('voNewNote').addEventListener('click', voPickTarget);
   $('voHearNote').addEventListener('click', voHearTarget);
   $('voStart').addEventListener('click', voStart);
+  $('voMin').addEventListener('change', function () { voDraw(null); });
+  $('voMax').addEventListener('change', function () { voDraw(null); });
 
   fillPieceSelect();
   loadPiece(0);
