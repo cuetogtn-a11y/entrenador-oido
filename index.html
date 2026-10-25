@@ -3188,7 +3188,24 @@ function ledger(x, y) {
     var r = Math.round(m), pc = ((r % 12) + 12) % 12, oct = Math.floor(r / 12) - 1;
     return CHROMA[pc] + oct;
   }
-  function PIECES() { return (window.EO && window.EO.PIECES) || []; }
+  // Una voz humana solo puede emitir una nota a la vez: una pieza solo sirve para Cantar si
+  // ninguna de sus voces/manos tiene dos notas simultáneas (acordes). Distintas voces sonando
+  // a la vez SÍ vale (es justo la polifonía coral de arriba); lo que no vale es una misma voz
+  // con un acorde. Se descartan aquí las piezas que no cumplan esto (p. ej. piezas de piano
+  // pensadas para dos manos con acordes, reutilizadas de otro módulo).
+  function pieceSingable(p) {
+    var seen = {};
+    for (var m = 0; m < p.measures.length; m++) {
+      var ms = p.measures[m];
+      for (var i = 0; i < ms.length; i++) {
+        var n = ms[i], key = m + ':' + n.h + ':' + n.t;
+        if (seen[key]) return false;
+        seen[key] = true;
+      }
+    }
+    return true;
+  }
+  function PIECES() { return ((window.EO && window.EO.PIECES) || []).filter(pieceSingable); }
 
   // Colocación en el pentagrama: a cada clase de altura (Do..Si) le corresponde un "escalón"
   // diatónico (0..6 dentro de la octava); los sostenidos comparten el escalón de su nota natural
@@ -3319,7 +3336,13 @@ function ledger(x, y) {
 
   function fillPieceSelect() {
     var sel = $('gPiece'); sel.innerHTML = '';
-    PIECES().forEach(function (p, i) { var o = document.createElement('option'); o.value = i; o.textContent = p.title; sel.appendChild(o); });
+    var list = PIECES();
+    if (!list.length) {
+      var o0 = document.createElement('option'); o0.textContent = '— sin piezas disponibles todavía —'; o0.disabled = true;
+      sel.appendChild(o0);
+      return;
+    }
+    list.forEach(function (p, i) { var o = document.createElement('option'); o.value = i; o.textContent = p.title; sel.appendChild(o); });
   }
   function fillHandSelect() {
     var sel = $('gHand'); sel.innerHTML = '';
@@ -3348,7 +3371,13 @@ function ledger(x, y) {
     stopSinging();
     var list = PIECES();
     st.piece = list[i] || list[0];
-    if (!st.piece) return;
+    if (!st.piece) {
+      st.events = []; st.voiceEvents = {}; st.totalBeats = 0;
+      $('gHand').innerHTML = '';
+      $('gOtherVoices').innerHTML = ''; $('gOtherVoicesRow').style.display = 'none';
+      drawEmptyRepertoire();
+      return;
+    }
     st.hand = 0;
     st.otherOn = {};
     fillHandSelect();
@@ -3413,12 +3442,22 @@ function ledger(x, y) {
     st.events.forEach(function (ev) { toneAt(c, prevMaster, t0 + ev.tBeat * bd, ev.dBeat * bd * 0.95, ev.midi); });
   }
 
-  function detectPitch(buf, sampleRate) {
+  // expectedMidi (opcional): cuando se sabe qué nota toca cantar ahora, se busca el tono solo
+  // cerca de esa altura (algo más de media octava a cada lado) en vez de en todo el rango de
+  // una voz humana. Con varios sonidos a la vez (clic, otras voces, ruido) la autocorrelación
+  // sin esa pista puede «engancharse» a un armónico y devolver una octava equivocada; acotar el
+  // rango de búsqueda a lo que realmente se espera evita ese error estructuralmente.
+  function detectPitch(buf, sampleRate, expectedMidi) {
     var n = buf.length, i, rms = 0;
     for (i = 0; i < n; i++) rms += buf[i] * buf[i];
     rms = Math.sqrt(rms / n);
     if (rms < 0.012) return -1;
     var minF = 70, maxF = 1100;
+    if (expectedMidi != null) {
+      var fExp = 440 * Math.pow(2, (expectedMidi - 69) / 12);
+      minF = Math.max(60, fExp * 0.60);
+      maxF = Math.min(1600, fExp * 1.68);
+    }
     var maxLag = Math.min(n - 1, Math.floor(sampleRate / minF));
     var minLag = Math.max(2, Math.floor(sampleRate / maxF));
     var bestLag = -1, bestCorr = 0;
@@ -3541,7 +3580,8 @@ function ledger(x, y) {
     if (!vo.running) return;
     var c = ctx();
     vo.analyser.getFloatTimeDomainData(vo.buf);
-    var f = detectPitch(vo.buf, c.sampleRate);
+    var expected = vo.mode === 'target' ? vo.targetMidi : null;
+    var f = detectPitch(vo.buf, c.sampleRate, expected);
     var detMidi = null;
     if (f > 0) {
       var m = freqToMidi(f);
@@ -3618,6 +3658,14 @@ function ledger(x, y) {
     g.clearRect(0, 0, W, H);
     g.fillStyle = '#9a978e'; g.font = '13px system-ui, sans-serif'; g.textAlign = 'center';
     g.fillText(st.piece ? 'Pulsa «Empezar a cantar» para ver tu afinación en vivo' : 'Elige una pieza', W / 2, H / 2);
+  }
+  function drawEmptyRepertoire() {
+    var cv = $('gCanvas'); if (!cv.getContext) return;
+    var g = cv.getContext('2d'), W = cv.width, H = cv.height;
+    g.clearRect(0, 0, W, H);
+    g.fillStyle = '#9a978e'; g.font = '13px system-ui, sans-serif'; g.textAlign = 'center';
+    var lines = ['Todavía no hay piezas aptas para cantar aquí', '(una sola nota por voz, sin acordes).', 'Mientras tanto, usa la pestaña «Vocalización».'];
+    lines.forEach(function (ln, i) { g.fillText(ln, W / 2, H / 2 - 14 + i * 18); });
   }
 
   function draw(nowBeat, detMidi) {
@@ -3713,7 +3761,8 @@ function ledger(x, y) {
     if (!st.running) return;
     var c = ctx(), nowBeat = (c.currentTime - st.t0) / st.bd - LEAD_BEATS;
     st.analyser.getFloatTimeDomainData(st.buf);
-    var f = detectPitch(st.buf, c.sampleRate);
+    var activeNow = activeAt(nowBeat);
+    var f = detectPitch(st.buf, c.sampleRate, activeNow ? activeNow.midi : null);
     var detMidi = null;
     if (f > 0) {
       var m = freqToMidi(f);
