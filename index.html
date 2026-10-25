@@ -165,7 +165,7 @@ button.tabbtn { font-size: .9rem; }
     <button type="button" class="tabbtn" data-v="dictado">Dictado</button>
     <button type="button" class="tabbtn" data-v="poly">Polifonía</button>
     <button type="button" class="tabbtn" data-v="score">Partitura</button>
-    <button type="button" class="tabbtn" data-v="canto">Cantar</button>
+    <a href="https://cuetogtn-a11y.github.io/entrenador-oido/" target="_blank" rel="noopener" class="tabbtn" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center;">Cantar ↗</a>
   </div>
 
 <div id="pitchApp">
@@ -610,7 +610,7 @@ button.tabbtn { font-size: .9rem; }
     <button class="act" id="gPreview">🎧 Escuchar la voz elegida</button>
   </div>
 
-  <canvas id="gCanvas" width="760" height="260"></canvas>
+  <canvas id="gCanvas" width="760" height="300"></canvas>
   <div class="gReadout" id="gReadout">—</div>
   <div class="gMeter"><div class="gMeterZero"></div><div class="gMeterFill" id="gMeterFill"></div></div>
   <div class="gStatus" id="gStatus"></div>
@@ -619,7 +619,7 @@ button.tabbtn { font-size: .9rem; }
     <button class="act primary" id="gStart">🎙 Empezar a cantar</button>
   </div>
 
-  <p class="hint">Usa auriculares si puedes: así el micrófono no capta el clic ni la pieza y la detección de afinación es más limpia. Las barras grises son las notas de la partitura moviéndose hacia la línea central; los puntos de color son lo que tú cantas (verde = afinado, naranja/rojo = desviado). Si tus puntos llegan antes o después de que la barra toque la línea, vas adelantado o atrasado de tempo.</p>
+  <p class="hint">Usa auriculares si puedes: así el micrófono no capta el clic ni la pieza y la detección de afinación es más limpia. Las notas se deslizan por un pentagrama real (clave de sol o de fa, según el registro de la voz elegida) hacia la línea roja; los puntos de color son lo que tú cantas, colocados en su altura correcta del pentagrama (verde = afinado, naranja/rojo = desviado). Si tus puntos llegan antes o después de que la nota toque la línea roja, vas adelantado o atrasado de tempo.</p>
 </div>
 </main>
 
@@ -3138,8 +3138,35 @@ function ledger(x, y) {
   }
   function PIECES() { return (window.EO && window.EO.PIECES) || []; }
 
+  // Colocación en el pentagrama: a cada clase de altura (Do..Si) le corresponde un "escalón"
+  // diatónico (0..6 dentro de la octava); los sostenidos comparten el escalón de su nota natural
+  // (igual que en una partitura real, donde Do♯ se dibuja en la misma línea/espacio que Do, con
+  // una alteración delante). diatonicStepInt crece de forma continua octava a octava; para la
+  // traza de lo que canta el usuario (que no "cae" justo en una nota), diatonicStepContinuous
+  // interpola linealmente entre el escalón del semitono de abajo y el de arriba, así el punto
+  // se desliza con suavidad por el pentagrama en vez de saltar.
+  var NATURAL_STEP = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6];
+  function diatonicStepInt(midiInt) {
+    var pc = ((midiInt % 12) + 12) % 12, oct = Math.floor(midiInt / 12);
+    return oct * 7 + NATURAL_STEP[pc];
+  }
+  function diatonicStepContinuous(midiFloat) {
+    var base = Math.floor(midiFloat), frac = midiFloat - base;
+    var s0 = diatonicStepInt(base), s1 = diatonicStepInt(base + 1);
+    return s0 + frac * (s1 - s0);
+  }
+  var TREBLE_REF = diatonicStepInt(64); // Mi4, línea inferior de la clave de sol
+  var BASS_REF = diatonicStepInt(43);   // Sol2, línea inferior de la clave de fa
+  var STAFF_TOP_REL = 8;                // línea superior: 4 líneas × 2 escalones = 8 escalones por encima de la inferior
+  function ledgerRelSteps(rel) {
+    var out = [];
+    if (rel > STAFF_TOP_REL) { for (var r = STAFF_TOP_REL + 2; r <= rel + 1e-6; r += 2) out.push(r); }
+    else if (rel < 0) { for (var r2 = -2; r2 >= rel - 1e-6; r2 -= 2) out.push(r2); }
+    return out;
+  }
+
   var st = {
-    piece: null, hand: 0, events: [], totalBeats: 0,
+    piece: null, hand: 0, events: [], totalBeats: 0, clef: 'treble', refStep: TREBLE_REF,
     running: false, raf: 0, ctx: null, master: null, mic: null, src: null, analyser: null, buf: null,
     t0: 0, bd: 0, trace: [], smMidi: null, silenceSince: 0
   };
@@ -3162,6 +3189,11 @@ function ledger(x, y) {
     out.sort(function (a, b) { return a.tBeat - b.tBeat; });
     st.events = out;
     st.totalBeats = p.measures.length * 4;
+    if (out.length) {
+      var sum = 0; out.forEach(function (e) { sum += e.midi; });
+      var avg = sum / out.length;
+      if (avg < 57) { st.clef = 'bass'; st.refStep = BASS_REF; } else { st.clef = 'treble'; st.refStep = TREBLE_REF; }
+    }
   }
   function activeAt(beat) {
     for (var i = 0; i < st.events.length; i++) {
@@ -3285,34 +3317,57 @@ function ledger(x, y) {
     g.fillText(st.piece ? 'Pulsa «Empezar a cantar» para ver tu afinación en vivo' : 'Elige una pieza', W / 2, H / 2);
   }
 
-  function midiRangeOf() {
-    if (!st.events.length) return [60, 72];
-    var lo = 200, hi = -1;
-    st.events.forEach(function (e) { if (e.midi < lo) lo = e.midi; if (e.midi > hi) hi = e.midi; });
-    return [lo - 2, hi + 2];
-  }
-
   function draw(nowBeat) {
     var cv = $('gCanvas'), g = cv.getContext('2d'), W = cv.width, H = cv.height;
     g.clearRect(0, 0, W, H);
-    var range = midiRangeOf(), lo = range[0], hi = range[1];
-    var rowH = (H - 24) / Math.max(1, (hi - lo + 1));
-    function yFor(m) { return 12 + (hi - m) * rowH; }
-    var pxPerBeat = 60, playheadX = 150;
+
+    var lineGap = 15, bottomLineY = 205, topLineY = bottomLineY - 4 * lineGap;
+    function yFor(diatonicStep) { return bottomLineY - (diatonicStep - st.refStep) * (lineGap / 2); }
+    function yForMidi(m) { return yFor(diatonicStepInt(Math.round(m))); }
+    var pxPerBeat = 60, playheadX = 170;
     function xFor(b) { return playheadX + (b - nowBeat) * pxPerBeat; }
 
     g.strokeStyle = '#e3ddcc';
     for (var mm = Math.floor(nowBeat / 4) - 1; mm <= Math.ceil((nowBeat + 10) / 4); mm++) {
-      var x = xFor(mm * 4);
-      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
+      var xm = xFor(mm * 4);
+      g.beginPath(); g.moveTo(xm, 0); g.lineTo(xm, H); g.stroke();
+    }
+
+    // Las 5 líneas del pentagrama, fijas: la partitura se desliza por debajo de ellas.
+    g.strokeStyle = '#4a4538'; g.lineWidth = 1.2;
+    for (var li = 0; li < 5; li++) {
+      var ly = topLineY + li * lineGap;
+      g.beginPath(); g.moveTo(0, ly); g.lineTo(W, ly); g.stroke();
+    }
+    g.lineWidth = 1;
+
+    // Clave (sol o fa) a la izquierda, fuera de la zona donde se desliza la música.
+    g.fillStyle = '#4a4538'; g.textAlign = 'center';
+    if (st.clef === 'treble') {
+      g.font = (lineGap * 6.4) + 'px serif';
+      g.fillText('𝄞', 26, bottomLineY - lineGap * 0.4);
+    } else {
+      g.font = (lineGap * 3.6) + 'px serif';
+      g.fillText('𝄢', 26, topLineY + lineGap * 1.6);
+    }
+
+    function ledgerLinesAt(relStep, cx, halfW) {
+      g.strokeStyle = '#4a4538';
+      ledgerRelSteps(relStep).forEach(function (r) {
+        var ly2 = yFor(st.refStep + r);
+        g.beginPath(); g.moveTo(cx - halfW, ly2); g.lineTo(cx + halfW, ly2); g.stroke();
+      });
     }
 
     g.fillStyle = '#cfe3ff'; g.strokeStyle = '#8fb4e6';
     st.events.forEach(function (e) {
       if (e.tBeat + e.dBeat < nowBeat - 4 || e.tBeat > nowBeat + 10) return;
-      var x = xFor(e.tBeat), w = Math.max(2, e.dBeat * pxPerBeat - 2), y = yFor(e.midi), h = Math.max(6, rowH - 3);
-      g.fillRect(x, y, w, h); g.strokeRect(x, y, w, h);
-      if (w > 24) { g.fillStyle = '#2f5d8a'; g.font = '10px system-ui, sans-serif'; g.textAlign = 'left'; g.fillText(midiName(e.midi), x + 3, y + h - 3); g.fillStyle = '#cfe3ff'; }
+      var step = diatonicStepInt(Math.round(e.midi)), rel = step - st.refStep;
+      var x = xFor(e.tBeat), w = Math.max(10, e.dBeat * pxPerBeat - 2), y = yFor(step), h = lineGap - 2;
+      ledgerLinesAt(rel, x + w / 2, Math.max(14, w / 2 + 4));
+      g.fillStyle = '#cfe3ff'; g.strokeStyle = '#8fb4e6';
+      g.fillRect(x, y - h / 2, w, h); g.strokeRect(x, y - h / 2, w, h);
+      if (w > 26) { g.fillStyle = '#2f5d8a'; g.font = '10px system-ui, sans-serif'; g.textAlign = 'left'; g.fillText(midiName(e.midi), x + 3, y + 3); }
     });
 
     var cutoff = nowBeat - 10;
@@ -3326,7 +3381,7 @@ function ledger(x, y) {
         color = cents <= 20 ? '#2e7d4f' : (cents <= 50 ? '#d99a00' : '#b3372f');
       }
       g.fillStyle = color;
-      g.beginPath(); g.arc(xFor(p.beat), yFor(p.midi), 3, 0, 2 * Math.PI); g.fill();
+      g.beginPath(); g.arc(xFor(p.beat), yFor(diatonicStepContinuous(p.midi)), 3, 0, 2 * Math.PI); g.fill();
     });
 
     g.strokeStyle = '#b3372f'; g.lineWidth = 2;
